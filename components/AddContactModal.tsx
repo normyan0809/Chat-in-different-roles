@@ -1,6 +1,6 @@
+
 import React, { useState } from 'react';
-import { Search, UserPlus, X, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { authService } from '../services/authService';
+import { UserPlus, X, AlertCircle, CheckCircle2, Copy } from 'lucide-react';
 
 interface AddContactModalProps {
   isOpen: boolean;
@@ -10,41 +10,35 @@ interface AddContactModalProps {
 }
 
 const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClose, onAdd, currentUserId }) => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [searchResult, setSearchResult] = useState<{id: string, name: string, avatar: string} | null>(null);
-  const [error, setError] = useState('');
+  const [peerId, setPeerId] = useState('');
+  const [nickname, setNickname] = useState('');
   const [success, setSuccess] = useState('');
 
   if (!isOpen) return null;
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setSuccess('');
-    setSearchResult(null);
+    if (!peerId.trim()) return;
 
-    if (searchTerm === currentUserId) {
-        setError("You cannot add yourself.");
+    if (peerId === currentUserId) {
+        alert("You cannot add yourself!");
         return;
     }
 
-    const user = authService.findUserByUsername(searchTerm);
-    if (user) {
-        setSearchResult(user);
-    } else {
-        setError("User not found.");
-    }
-  };
-
-  const handleAdd = () => {
-    if (searchResult) {
-        onAdd(searchResult.id, searchResult.name, searchResult.avatar);
-        setSuccess(`Added ${searchResult.name} to contacts!`);
-        setSearchResult(null);
-        setSearchTerm('');
-        // Close after a brief delay
-        setTimeout(onClose, 1500);
-    }
+    // Since we are P2P, we can't "validate" the user exists without connecting.
+    // We just assume they exist and add them. The connection status will update later.
+    const name = nickname.trim() || peerId;
+    const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`;
+    
+    onAdd(peerId, name, avatar);
+    setSuccess(`Added contact! If they are online, status will turn green.`);
+    setPeerId('');
+    setNickname('');
+    
+    setTimeout(() => {
+        setSuccess('');
+        onClose();
+    }, 2000);
   };
 
   return (
@@ -52,7 +46,7 @@ const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClose, onAd
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b border-slate-800 bg-slate-800/50">
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <UserPlus size={18} className="text-emerald-400"/> Add New Contact
+              <UserPlus size={18} className="text-emerald-400"/> Add New Friend
           </h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
             <X size={20} />
@@ -60,54 +54,57 @@ const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClose, onAd
         </div>
 
         <div className="p-6">
-          <form onSubmit={handleSearch} className="mb-6">
-            <label className="block text-xs font-medium text-slate-400 mb-2 uppercase tracking-wider">Search by Username</label>
-            <div className="flex gap-2">
+            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-6 text-center">
+                <p className="text-xs text-slate-400 mb-1 uppercase tracking-wider">Your ID</p>
+                <div className="flex items-center justify-center gap-2">
+                    <code className="text-emerald-400 font-bold font-mono text-lg">{currentUserId}</code>
+                    <button 
+                        onClick={() => navigator.clipboard.writeText(currentUserId)}
+                        className="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white"
+                        title="Copy ID"
+                    >
+                        <Copy size={16} />
+                    </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">Share this ID with your friend so they can add you.</p>
+            </div>
+
+          <form onSubmit={handleAdd} className="space-y-4">
+            <div>
+                <label className="block text-xs font-medium text-slate-400 mb-2 uppercase tracking-wider">Friend's ID</label>
                 <input 
                     type="text" 
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="e.g. jsmith"
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500"
+                    value={peerId}
+                    onChange={(e) => setPeerId(e.target.value)}
+                    placeholder="Enter friend's ID..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 font-mono"
+                    required
                 />
-                <button 
-                    type="submit"
-                    className="bg-slate-800 hover:bg-slate-700 text-white px-4 rounded-xl border border-slate-700 transition-colors"
-                >
-                    <Search size={20} />
-                </button>
             </div>
+            
+            <div>
+                <label className="block text-xs font-medium text-slate-400 mb-2 uppercase tracking-wider">Nickname (Optional)</label>
+                <input 
+                    type="text" 
+                    value={nickname}
+                    onChange={(e) => setNickname(e.target.value)}
+                    placeholder="What do you call them?"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500"
+                />
+            </div>
+
+            <button 
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-xl transition-colors shadow-lg shadow-emerald-900/20"
+            >
+                Add & Connect
+            </button>
           </form>
 
-          {error && (
-              <div className="p-4 bg-rose-500/10 border border-rose-500/50 rounded-xl flex items-center gap-3 text-rose-400 animate-in fade-in slide-in-from-top-2">
-                  <AlertCircle size={20} />
-                  <span>{error}</span>
-              </div>
-          )}
-
           {success && (
-              <div className="p-4 bg-emerald-500/10 border border-emerald-500/50 rounded-xl flex items-center gap-3 text-emerald-400 animate-in fade-in slide-in-from-top-2">
+              <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/50 rounded-xl flex items-center gap-3 text-emerald-400 animate-in fade-in slide-in-from-top-2">
                   <CheckCircle2 size={20} />
                   <span>{success}</span>
-              </div>
-          )}
-
-          {searchResult && !success && (
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700 animate-in fade-in slide-in-from-top-2">
-                  <div className="flex items-center gap-4 mb-4">
-                      <img src={searchResult.avatar} alt={searchResult.name} className="w-12 h-12 rounded-full border border-slate-600" />
-                      <div>
-                          <h3 className="font-bold text-white text-lg">{searchResult.name}</h3>
-                          <p className="text-slate-400 text-sm">@{searchResult.id}</p>
-                      </div>
-                  </div>
-                  <button 
-                    onClick={handleAdd}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-lg transition-colors"
-                  >
-                      Add to Contacts
-                  </button>
               </div>
           )}
         </div>

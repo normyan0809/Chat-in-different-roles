@@ -1,5 +1,6 @@
+
 export interface UserProfile {
-  id: string; // Unique identifier (username)
+  id: string; // This will effectively be the Peer ID (username)
   name: string;
   avatar: string;
   bio: string;
@@ -11,14 +12,16 @@ export interface Mood {
   emoji: string;
   timestamp: number;
   visibility: 'public' | 'private' | 'specific';
-  allowedContactIds: string[]; // Only used if visibility is 'specific'
+  allowedContactIds: string[];
 }
 
 export interface Message {
   id: string;
-  role: 'user' | 'model';
+  role: 'user' | 'model' | 'peer'; // Added 'peer' for friends
+  senderId?: string; // ID of the person who sent it
+  senderPersonaName?: string; // The persona name used by the sender
   type: 'text' | 'sticker' | 'image' | 'video';
-  text: string; // Content, Sticker URL, or Base64 Data URL
+  text: string;
   timestamp: number;
   isRead?: boolean;
   isRecalled?: boolean;
@@ -33,18 +36,27 @@ export interface Message {
 
 export interface Persona {
   id: string;
-  name: string; // e.g., "Drinking Buddy", "Colleague", "Detective"
-  description: string; // System instruction for this relationship
-  color: string; // Visual theme for this persona
+  name: string;
+  description: string;
+  color: string;
   messages: Message[];
   lastActive: number;
 }
 
 export interface Contact {
-  id: string;
+  id: string; // The Friend's Peer ID
   name: string;
   avatar: string;
+  isAiAgent?: boolean; // Flag to distinguish Real Humans vs AI
+  isOnline?: boolean; // P2P status
   personas: Persona[];
 }
 
 export type ThemeColor = 'blue' | 'purple' | 'green' | 'rose' | 'amber' | 'cyan';
+
+// P2P Payload Structure
+export interface P2PDataPacket {
+  type: 'MESSAGE' | 'CONNECTION_REQUEST' | 'STATUS_UPDATE';
+  payload: any;
+  senderProfile: UserProfile;
+}

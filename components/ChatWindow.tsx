@@ -1,5 +1,6 @@
+
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, Smile, Reply, Trash2, Check, CheckCheck, X, Image as ImageIcon, PlayCircle } from 'lucide-react';
+import { Send, Loader2, Smile, Reply, Trash2, Check, CheckCheck, X, Image as ImageIcon, PlayCircle, Signal } from 'lucide-react';
 import { Message, Persona, Contact, UserProfile } from '../types';
 import { THEME_COLORS, STICKERS } from '../constants';
 
@@ -75,7 +76,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       };
       reader.readAsDataURL(file);
       
-      // Reset input
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -84,7 +84,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const themeText = themeClass.replace('bg-', 'text-');
   const themeBorder = themeClass.replace('bg-', 'border-');
 
-  // Time formatter
   const formatTime = (timestamp: number) => {
       return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -112,6 +111,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-900 relative">
+      {/* Offline Warning for Humans */}
+      {!contact.isAiAgent && !contact.isOnline && (
+        <div className="bg-amber-500/10 text-amber-400 text-xs text-center py-1 border-b border-amber-500/20">
+          User is currently offline. Messages will be delivered when they connect.
+        </div>
+      )}
+
       {/* Messages Area */}
       <div 
         ref={messagesContainerRef}
@@ -119,8 +125,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
       >
         {/* Context Header Bubble */}
         <div className="flex justify-center mb-6">
-            <div className={`text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shadow-sm`}>
-                Current Persona: <span className={`${themeText} font-bold`}>{persona.name}</span>
+            <div className={`text-xs px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 shadow-sm flex items-center gap-2`}>
+                <span className="opacity-70">Identity:</span>
+                <span className={`${themeText} font-bold`}>{persona.name}</span>
+                {!contact.isAiAgent && (
+                    <span className={`w-2 h-2 rounded-full ${contact.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></span>
+                )}
             </div>
         </div>
 
@@ -143,16 +153,25 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               className={`group flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}
             >
               {!isMe && (
-                <img 
-                  src={contact.avatar} 
-                  alt={contact.name} 
-                  className="w-8 h-8 rounded-full mb-1 border border-slate-700"
-                />
+                <div className="flex flex-col items-center">
+                    <img 
+                    src={contact.avatar} 
+                    alt={contact.name} 
+                    className="w-8 h-8 rounded-full mb-1 border border-slate-700"
+                    />
+                </div>
               )}
 
               {/* Message Content Group (Bubble + Actions) */}
               <div className={`flex flex-col max-w-[70%] ${isMe ? 'items-end' : 'items-start'}`}>
                 
+                {/* Persona Name for Peers (if provided) */}
+                {!isMe && msg.senderPersonaName && (
+                    <span className={`text-[10px] ml-1 mb-0.5 ${themeText} font-semibold opacity-80`}>
+                        as {msg.senderPersonaName}
+                    </span>
+                )}
+
                 {/* Reply Context */}
                 {msg.replyTo && (
                     <div className={`mb-1 px-3 py-1 rounded-lg text-xs border-l-2 bg-slate-800/50 text-slate-400 ${isMe ? 'border-slate-500' : themeBorder} opacity-80`}>
@@ -315,14 +334,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             onChange={(e) => setInputText(e.target.value)}
             placeholder={`Message ${persona.name}...`}
             className="flex-1 bg-slate-800 text-slate-200 placeholder-slate-500 border border-slate-700 rounded-full py-3 pl-5 pr-12 focus:outline-none focus:ring-2 focus:ring-opacity-50 focus:ring-slate-500 transition-all"
-            disabled={isTyping}
+            disabled={isTyping && contact.isAiAgent}
           />
           <button
             type="submit"
-            disabled={!inputText.trim() || isTyping}
+            disabled={!inputText.trim() || (isTyping && contact.isAiAgent)}
             className={`p-3 rounded-full ${inputText.trim() ? themeClass : 'bg-slate-800'} ${inputText.trim() ? 'text-white' : 'text-slate-500'} border border-slate-700 transition-all hover:opacity-90 disabled:opacity-50`}
           >
-            {isTyping ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+            {isTyping && contact.isAiAgent ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
           </button>
         </form>
       </div>

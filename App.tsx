@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Menu, X, Plus, UserCircle2, Sparkles, LogOut } from 'lucide-react';
-import { Contact, Persona, Message, UserProfile, Mood } from './types';
+import { MessageCircle, Menu, X, Plus, UserCircle2, Sparkles, LogOut, Share2, Copy } from 'lucide-react';
+import { Contact, Persona, Message, UserProfile, Mood, P2PDataPacket } from './types';
 import { INITIAL_CONTACTS, DEFAULT_USER_PROFILE } from './constants';
 import { generateResponse, generatePersonaDescription } from './services/geminiService';
 import { authService } from './services/authService';
+import { p2pService } from './services/p2pService';
 import ChatWindow from './components/ChatWindow';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import UserProfileModal from './components/UserProfileModal';
@@ -26,7 +28,7 @@ const App: React.FC = () => {
   const [isMoodModalOpen, setIsMoodModalOpen] = useState(false);
   const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false);
 
-  // Initialize Auth
+  // Initialize Auth & Data
   useEffect(() => {
     const user = authService.getCurrentUser();
     if (user) {
@@ -44,6 +46,109 @@ const App: React.FC = () => {
     }
   }, [contacts, currentUser]);
 
+  // Derived state
+  const selectedContact = contacts.find(c => c.id === selectedContactId) || contacts[0];
+  const activePersonaId = selectedContact ? (activePersonaIds[selectedContact.id] || selectedContact.personas[0]?.id) : '';
+  const activePersona = selectedContact ? (selectedContact.personas.find(p => p.id === activePersonaId) || selectedContact.personas[0]) : null;
+
+  // Init P2P when user logs in
+  useEffect(() => {
+    if (currentUser) {
+      p2pService.initialize(
+        currentUser.id,
+        currentUser,
+        handleP2PData,
+        handlePeerConnect
+      );
+    }
+    
+    // Cleanup on unmount (refresh)
+    return () => {
+        // p2pService.disconnect(); // We usually want to keep connection alive unless logged out
+    };
+  }, [currentUser]);
+
+  // Handle incoming P2P data
+  const handleP2PData = (data: P2PDataPacket, peerId: string) => {
+    console.log("Received P2P Data from", peerId, data);
+    
+    if (data.type === 'CONNECTION_REQUEST') {
+        // Auto-add contact if not exists, or update status
+        setContacts(prev => {
+            const exists = prev.find(c => c.id === peerId);
+            if (exists) {
+                return prev.map(c => c.id === peerId ? { ...c, isOnline: true } : c);
+            } else {
+                // New inbound contact!
+                const newContact: Contact = {
+                    id: peerId, // Use Peer ID
+                    name: data.senderProfile.name,
+                    avatar: data.senderProfile.avatar,
+                    isAiAgent: false,
+                    isOnline: true,
+                    personas: [
+                        {
+                            id: 'default',
+                            name: 'General',
+                            description: 'Default chat',
+                            color: 'blue',
+                            messages: [],
+                            lastActive: Date.now()
+                        }
+                    ]
+                };
+                return [...prev, newContact];
+            }
+        });
+    }
+
+    if (data.type === 'MESSAGE') {
+        const { text, type, senderPersonaName, replyTo } = data.payload;
+        
+        const newMessage: Message = {
+            id: Date.now().toString(),
+            role: 'peer',
+            type: type,
+            text: text,
+            senderPersonaName: senderPersonaName,
+            timestamp: Date.now(),
+            isRead: false, // Mark as unread logic could go here
+            replyTo: replyTo
+        };
+
+        setContacts(prev => prev.map(c => {
+            // Find the contact. Note: peerId from PeerJS might differ slightly from stored ID if cleaned, 
+            // but we use the ID stored in Contact which should match.
+            // Simplification: We assume Contact ID == Peer ID.
+            if (c.id === peerId || c.id === data.senderProfile.id) {
+                // If the user has multiple personas for this contact, where does the message go?
+                // For P2P simplicity, we append it to the CURRENT active persona if selected, 
+                // OR the first persona.
+                // Better: Append to the first persona (Default) or find one matching context if we sent context ID.
+                
+                // Let's just append to the first persona for now to ensure delivery.
+                // In a perfect world, we'd sync Persona IDs across peers.
+                const targetPersonaId = c.personas[0].id;
+
+                return {
+                    ...c,
+                    personas: c.personas.map(p => {
+                        if (p.id === targetPersonaId) {
+                            return { ...p, messages: [...p.messages, newMessage], lastActive: Date.now() };
+                        }
+                        return p;
+                    })
+                };
+            }
+            return c;
+        }));
+    }
+  };
+
+  const handlePeerConnect = (peerId: string) => {
+      setContacts(prev => prev.map(c => c.id === peerId ? { ...c, isOnline: true } : c));
+  };
+
   const handleLoginSuccess = (user: UserProfile) => {
     setCurrentUser(user);
     const data = authService.getUserData(user.id);
@@ -58,16 +163,13 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     authService.logout();
+    p2pService.disconnect();
     setCurrentUser(null);
     setContacts([]);
     setSelectedContactId('');
   };
 
-  // Derived state
-  const selectedContact = contacts.find(c => c.id === selectedContactId) || contacts[0];
-  const activePersonaId = selectedContact ? (activePersonaIds[selectedContact.id] || selectedContact.personas[0]?.id) : '';
-  const activePersona = selectedContact ? (selectedContact.personas.find(p => p.id === activePersonaId) || selectedContact.personas[0]) : null;
-
+  // Sync active personas map
   useEffect(() => {
     const initialMap: {[key: string]: string} = {};
     contacts.forEach(c => {
@@ -85,6 +187,10 @@ const App: React.FC = () => {
     if (window.innerWidth < 768) {
       setSidebarOpen(false);
     }
+    // Attempt P2P connect when selected to ensure line is open
+    if (id !== 'ai-assistant') {
+        p2pService.connectToPeer(id);
+    }
   };
 
   const handlePersonaSelect = (personaId: string) => {
@@ -95,18 +201,19 @@ const App: React.FC = () => {
   };
 
   const handleAddContact = (contactId: string, name: string, avatar: string) => {
-      // Check if contact already exists
       if (contacts.find(c => c.id === contactId)) return;
 
       const newContact: Contact = {
           id: contactId,
           name: name,
           avatar: avatar,
+          isAiAgent: false,
+          isOnline: false, // Assume offline until connected
           personas: [
               {
                   id: Math.random().toString(36).substr(2, 9),
                   name: 'Default',
-                  description: 'A normal conversation.',
+                  description: 'General chat',
                   color: 'blue',
                   messages: [],
                   lastActive: Date.now()
@@ -117,16 +224,22 @@ const App: React.FC = () => {
       const updatedContacts = [...contacts, newContact];
       setContacts(updatedContacts);
       setSelectedContactId(newContact.id);
+      
+      // Attempt connection immediately
+      p2pService.connectToPeer(contactId);
   };
 
   const handleAddPersona = async (name: string, description: string, color: string) => {
     setIsGeneratingPersona(true);
     let finalDescription = description;
     
-    if (!finalDescription && process.env.API_KEY) {
+    // Only generate AI description if it's the AI Agent contact
+    const isAi = contacts.find(c => c.id === selectedContactId)?.isAiAgent;
+
+    if (isAi && !finalDescription && process.env.API_KEY) {
         finalDescription = await generatePersonaDescription(process.env.API_KEY, name);
     } else if (!finalDescription) {
-        finalDescription = `You are playing the role of ${name}.`;
+        finalDescription = `Chat context: ${name}`;
     }
 
     const newPersona: Persona = {
@@ -166,6 +279,7 @@ const App: React.FC = () => {
   };
 
   const handleRecallMessage = (messageId: string) => {
+      // Local recall only for now
       setContacts(prev => prev.map(c => {
           if (c.id === selectedContactId) {
               return {
@@ -193,17 +307,13 @@ const App: React.FC = () => {
   };
 
   const handleSendMessage = async (text: string, type: 'text' | 'sticker' | 'image' | 'video' = 'text', replyTo?: Message) => {
-    if (!process.env.API_KEY) {
-        alert("API Key is missing.");
-        return;
-    }
     if (!currentUser || !activePersona) return;
 
     const newMessage: Message = {
         id: Date.now().toString(),
         role: 'user',
         type,
-        text, // URL if sticker/media, text content otherwise
+        text, 
         timestamp: Date.now(),
         isRead: false,
         replyTo: replyTo ? {
@@ -215,7 +325,7 @@ const App: React.FC = () => {
         } : undefined
     };
 
-    // Optimistic Update
+    // 1. Optimistic Update (Show on my screen)
     const updatedPersona = { 
         ...activePersona, 
         messages: [...activePersona.messages, newMessage] 
@@ -231,71 +341,87 @@ const App: React.FC = () => {
         return c;
     }));
 
-    setIsTyping(true);
+    // 2. Branch Logic: AI vs Real Human
+    if (selectedContact.isAiAgent) {
+        // --- AI Logic ---
+        if (!process.env.API_KEY) {
+            alert("API Key is missing for AI.");
+            return;
+        }
 
-    // Simulate "Read" status
-    setTimeout(() => {
-         setContacts(prev => prev.map(c => {
+        setIsTyping(true);
+
+        // Simulate "Read" status
+        setTimeout(() => {
+             setContacts(prev => prev.map(c => {
+                if (c.id === selectedContactId) {
+                    return {
+                        ...c,
+                        personas: c.personas.map(p => {
+                            if (p.id === activePersonaId) {
+                                return {
+                                    ...p,
+                                    messages: p.messages.map(m => m.id === newMessage.id ? { ...m, isRead: true } : m)
+                                };
+                            }
+                            return p;
+                        })
+                    };
+                }
+                return c;
+            }));
+        }, 1500);
+
+        let moodContext: Mood | undefined = currentUser.mood;
+        const aiResponseText = await generateResponse(
+            process.env.API_KEY,
+            updatedPersona.description,
+            updatedPersona.messages,
+            { text, type },
+            { replyTo, userMood: moodContext }
+        );
+
+        const aiMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: 'model',
+            type: 'text',
+            text: aiResponseText,
+            timestamp: Date.now(),
+            isRead: true
+        };
+
+        setIsTyping(false);
+
+        setContacts(prev => prev.map(c => {
             if (c.id === selectedContactId) {
                 return {
                     ...c,
-                    personas: c.personas.map(p => {
-                        if (p.id === activePersonaId) {
-                            return {
-                                ...p,
-                                messages: p.messages.map(m => m.id === newMessage.id ? { ...m, isRead: true } : m)
-                            };
-                        }
-                        return p;
-                    })
+                    personas: c.personas.map(p => p.id === activePersonaId ? {
+                        ...p,
+                        messages: [...updatedPersona.messages, aiMessage], 
+                        lastActive: Date.now()
+                    } : p)
                 };
             }
             return c;
         }));
-    }, 1500);
 
-    // Prepare context: Check if this contact is allowed to see user mood
-    let moodContext: Mood | undefined = undefined;
-    if (currentUser.mood) {
-        if (currentUser.mood.visibility === 'public') {
-            moodContext = currentUser.mood;
-        } else if (currentUser.mood.visibility === 'specific' && currentUser.mood.allowedContactIds?.includes(selectedContactId)) {
-            moodContext = currentUser.mood;
-        }
+    } else {
+        // --- Peer To Peer Logic ---
+        // Send payload to friend
+        const payload: P2PDataPacket = {
+            type: 'MESSAGE',
+            senderProfile: currentUser,
+            payload: {
+                text: newMessage.text,
+                type: newMessage.type,
+                senderPersonaName: activePersona.name, // The "Identity" feature
+                replyTo: newMessage.replyTo
+            }
+        };
+
+        p2pService.sendToPeer(selectedContact.id, payload);
     }
-
-    const aiResponseText = await generateResponse(
-        process.env.API_KEY,
-        updatedPersona.description,
-        updatedPersona.messages,
-        { text, type },
-        { replyTo, userMood: moodContext }
-    );
-
-    const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        type: 'text',
-        text: aiResponseText,
-        timestamp: Date.now(),
-        isRead: true
-    };
-
-    setIsTyping(false);
-
-    setContacts(prev => prev.map(c => {
-        if (c.id === selectedContactId) {
-            return {
-                ...c,
-                personas: c.personas.map(p => p.id === activePersonaId ? {
-                    ...p,
-                    messages: [...updatedPersona.messages, aiMessage], 
-                    lastActive: Date.now()
-                } : p)
-            };
-        }
-        return c;
-    }));
   };
 
   // --- Render ---
@@ -368,12 +494,17 @@ const App: React.FC = () => {
               >
                 <div className="relative">
                     <img src={contact.avatar} alt={contact.name} className="w-10 h-10 rounded-full object-cover" />
-                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-900"></div>
+                    {contact.isOnline && (
+                        <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-900" title="Online"></div>
+                    )}
                 </div>
-                <div className="ml-3 text-left">
-                  <p className="font-medium text-slate-200">{contact.name}</p>
-                  <p className="text-xs text-slate-500 truncate w-40">
-                    {contact.personas.length} Active Personas
+                <div className="ml-3 text-left overflow-hidden">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-slate-200 truncate">{contact.name}</p>
+                    {contact.isAiAgent && <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1 rounded border border-purple-500/30">AI</span>}
+                  </div>
+                  <p className="text-xs text-slate-500 truncate">
+                    {contact.personas.length > 1 ? `${contact.personas.length} Identities` : contact.id}
                   </p>
                 </div>
               </button>
@@ -391,20 +522,20 @@ const App: React.FC = () => {
 
         {/* User Profile Footer */}
         <div className="p-3 border-t border-slate-800 bg-slate-900">
-            {currentUser.mood && (
-                <div className="mb-2 mx-1 px-3 py-1.5 bg-slate-800/50 rounded-lg flex items-center justify-between border border-slate-700/50">
-                     <div className="flex items-center gap-2 overflow-hidden">
-                        <span className="text-lg">{currentUser.mood.emoji}</span>
-                        <span className="text-xs text-slate-300 truncate">{currentUser.mood.content}</span>
-                     </div>
+            <div className="mb-3 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                 <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                     <span>My ID (Share this):</span>
                      <button 
-                        onClick={() => setIsMoodModalOpen(true)}
-                        className="text-slate-500 hover:text-white"
+                        onClick={() => navigator.clipboard.writeText(currentUser.id)}
+                        className="hover:text-white"
                      >
-                         <Sparkles size={12} />
+                         <Copy size={12} />
                      </button>
-                </div>
-            )}
+                 </div>
+                 <div className="font-mono text-emerald-400 font-bold tracking-wide truncate">
+                     {currentUser.id}
+                 </div>
+            </div>
 
             <div className="flex items-center gap-1">
                 <button 
@@ -414,7 +545,7 @@ const App: React.FC = () => {
                     <img src={currentUser.avatar} alt="Me" className="w-9 h-9 rounded-full object-cover border border-slate-700 group-hover:border-emerald-500 transition-colors" />
                     <div className="ml-3 text-left flex-1 min-w-0">
                         <p className="text-sm font-bold text-white group-hover:text-emerald-400 transition-colors truncate">{currentUser.name}</p>
-                        <p className="text-[10px] text-slate-500 truncate">@{currentUser.id}</p>
+                        <p className="text-[10px] text-slate-500 truncate">Online</p>
                     </div>
                 </button>
                 <button 
@@ -454,9 +585,12 @@ const App: React.FC = () => {
                 <div className="bg-slate-900/50 backdrop-blur-sm z-10">
                     <div className="hidden md:flex items-center justify-between px-6 py-3 border-b border-slate-800">
                         <div className="flex items-center gap-4">
-                            <h2 className="text-lg font-bold text-white">{selectedContact.name}</h2>
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                                {selectedContact.personas.length} Relationships
+                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                {selectedContact.name}
+                                {selectedContact.isAiAgent && <Sparkles size={16} className="text-purple-400" />}
+                            </h2>
+                            <span className={`text-xs px-2 py-0.5 rounded-full border ${selectedContact.isOnline ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                                {selectedContact.isOnline ? 'Online' : 'Offline'}
                             </span>
                         </div>
                     </div>
