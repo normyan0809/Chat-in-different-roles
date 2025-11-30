@@ -62,26 +62,33 @@ const App: React.FC = () => {
       );
     }
     
-    // Cleanup on unmount (refresh)
+    // Attempt to reconnect to all known contacts
+    contacts.forEach(c => {
+        if (!c.isAiAgent) {
+            p2pService.connectToPeer(c.id);
+        }
+    });
+
     return () => {
-        // p2pService.disconnect(); // We usually want to keep connection alive unless logged out
+        // p2pService.disconnect(); // Keep connection alive usually
     };
-  }, [currentUser]);
+  }, [currentUser]); // Run when user logs in
 
   // Handle incoming P2P data
   const handleP2PData = (data: P2PDataPacket, peerId: string) => {
     console.log("Received P2P Data from", peerId, data);
     
+    // 1. Handle New Connection / Handshake
     if (data.type === 'CONNECTION_REQUEST') {
-        // Auto-add contact if not exists, or update status
         setContacts(prev => {
             const exists = prev.find(c => c.id === peerId);
             if (exists) {
+                // Just update online status
                 return prev.map(c => c.id === peerId ? { ...c, isOnline: true } : c);
             } else {
-                // New inbound contact!
+                // Auto-add new contact!
                 const newContact: Contact = {
-                    id: peerId, // Use Peer ID
+                    id: peerId, 
                     name: data.senderProfile.name,
                     avatar: data.senderProfile.avatar,
                     isAiAgent: false,
@@ -102,6 +109,7 @@ const App: React.FC = () => {
         });
     }
 
+    // 2. Handle Message
     if (data.type === 'MESSAGE') {
         const { text, type, senderPersonaName, replyTo } = data.payload;
         
@@ -112,36 +120,66 @@ const App: React.FC = () => {
             text: text,
             senderPersonaName: senderPersonaName,
             timestamp: Date.now(),
-            isRead: false, // Mark as unread logic could go here
+            isRead: false,
             replyTo: replyTo
         };
 
-        setContacts(prev => prev.map(c => {
-            // Find the contact. Note: peerId from PeerJS might differ slightly from stored ID if cleaned, 
-            // but we use the ID stored in Contact which should match.
-            // Simplification: We assume Contact ID == Peer ID.
-            if (c.id === peerId || c.id === data.senderProfile.id) {
-                // If the user has multiple personas for this contact, where does the message go?
-                // For P2P simplicity, we append it to the CURRENT active persona if selected, 
-                // OR the first persona.
-                // Better: Append to the first persona (Default) or find one matching context if we sent context ID.
-                
-                // Let's just append to the first persona for now to ensure delivery.
-                // In a perfect world, we'd sync Persona IDs across peers.
-                const targetPersonaId = c.personas[0].id;
+        setContacts(prev => {
+            // Find contact (or create temp one if message arrives before handshake)
+            let contactIndex = prev.findIndex(c => c.id === peerId);
+            let newContacts = [...prev];
 
-                return {
-                    ...c,
-                    personas: c.personas.map(p => {
-                        if (p.id === targetPersonaId) {
-                            return { ...p, messages: [...p.messages, newMessage], lastActive: Date.now() };
-                        }
-                        return p;
-                    })
+            if (contactIndex === -1) {
+                // Should have been handled by handshake, but failsafe:
+                const tempContact: Contact = {
+                    id: peerId,
+                    name: data.senderProfile.name || peerId,
+                    avatar: data.senderProfile.avatar || DEFAULT_USER_PROFILE.avatar,
+                    isAiAgent: false,
+                    isOnline: true,
+                    personas: [{
+                        id: 'default',
+                        name: 'General',
+                        description: 'Default',
+                        color: 'blue',
+                        messages: [],
+                        lastActive: Date.now()
+                    }]
                 };
+                newContacts.push(tempContact);
+                contactIndex = newContacts.length - 1;
             }
-            return c;
-        }));
+
+            const contact = newContacts[contactIndex];
+            
+            // SMART ROUTING:
+            // If the sender used a persona name (e.g. "Work"), and I have a persona named "Work" for them,
+            // route the message to that persona. Otherwise, go to default (first).
+            let targetPersonaId = contact.personas[0].id; // Default to first
+            
+            if (senderPersonaName) {
+                const matchingPersona = contact.personas.find(p => p.name.toLowerCase() === senderPersonaName.toLowerCase());
+                if (matchingPersona) {
+                    targetPersonaId = matchingPersona.id;
+                }
+            }
+
+            newContacts[contactIndex] = {
+                ...contact,
+                personas: contact.personas.map(p => {
+                    if (p.id === targetPersonaId) {
+                        return { 
+                            ...p, 
+                            messages: [...p.messages, newMessage], 
+                            lastActive: Date.now() 
+                        };
+                    }
+                    return p;
+                })
+            };
+
+            return newContacts;
+        });
     }
   };
 
@@ -212,7 +250,7 @@ const App: React.FC = () => {
           personas: [
               {
                   id: Math.random().toString(36).substr(2, 9),
-                  name: 'Default',
+                  name: 'General',
                   description: 'General chat',
                   color: 'blue',
                   messages: [],

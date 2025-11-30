@@ -16,16 +16,16 @@ class P2PService {
     this.onDataReceived = onData;
     this.onConnectionOpened = onOpen;
 
-    // Initialize Peer with the user's ID
-    // We use a clean ID string (alphanumeric only)
-    const cleanId = userId.replace(/[^a-zA-Z0-9]/g, '');
+    // Use a simpler ID for PeerJS compatibility (alphanumeric only recommended)
+    // We assume userId is the username which we control to be simple in Auth
+    const cleanId = userId.replace(/[^a-zA-Z0-9_-]/g, '');
     
     this.peer = new Peer(cleanId, {
       debug: 1,
     });
 
     this.peer.on('open', (id) => {
-      console.log('My peer ID is: ' + id);
+      console.log('My P2P ID is:', id);
     });
 
     this.peer.on('connection', (conn) => {
@@ -39,20 +39,21 @@ class P2PService {
 
   private handleConnection(conn: DataConnection) {
     conn.on('open', () => {
-      console.log('Connected to: ', conn.peer);
+      console.log('Connected to:', conn.peer);
       this.connections.set(conn.peer, conn);
       
-      // Send handshake (my profile)
-      if (this.myProfile) {
-        this.sendToPeer(conn.peer, {
-          type: 'CONNECTION_REQUEST',
-          payload: { status: 'online' },
-          senderProfile: this.myProfile
-        });
+      if (this.onConnectionOpened) {
+          this.onConnectionOpened(conn.peer);
       }
 
-      if (this.onConnectionOpened) {
-        this.onConnectionOpened(conn.peer);
+      // Send immediate handshake with my profile
+      if (this.myProfile) {
+          const handshake: P2PDataPacket = {
+              type: 'CONNECTION_REQUEST',
+              payload: {},
+              senderProfile: this.myProfile
+          };
+          conn.send(handshake);
       }
     });
 
@@ -63,30 +64,32 @@ class P2PService {
     });
 
     conn.on('close', () => {
+      console.log('Connection closed:', conn.peer);
       this.connections.delete(conn.peer);
+    });
+    
+    conn.on('error', (err) => {
+        console.error("Connection error:", err);
+        this.connections.delete(conn.peer);
     });
   }
 
   connectToPeer(peerId: string) {
-    if (!this.peer) return;
-    const cleanId = peerId.replace(/[^a-zA-Z0-9]/g, '');
-    if (this.connections.has(cleanId)) return; // Already connected
+    if (!this.peer || this.connections.has(peerId)) return;
 
-    const conn = this.peer.connect(cleanId);
+    console.log('Attempting to connect to:', peerId);
+    const conn = this.peer.connect(peerId);
     this.handleConnection(conn);
   }
 
   sendToPeer(peerId: string, data: P2PDataPacket) {
-    const cleanId = peerId.replace(/[^a-zA-Z0-9]/g, '');
-    const conn = this.connections.get(cleanId);
+    const conn = this.connections.get(peerId);
     if (conn && conn.open) {
       conn.send(data);
     } else {
-      // Try to reconnect and send
-      this.connectToPeer(cleanId);
-      // Note: Data might be lost if immediate reconnection fails. 
-      // In a full app, we would queue messages here.
-      console.warn(`Connection to ${peerId} is not open. Attempting to reconnect.`);
+      console.warn(`No active connection to ${peerId}. Attempting reconnect...`);
+      this.connectToPeer(peerId);
+      // Simple retry logic could go here, but for now we rely on UI to show offline
     }
   }
 
@@ -96,6 +99,11 @@ class P2PService {
       this.peer = null;
       this.connections.clear();
     }
+  }
+
+  isPeerConnected(peerId: string): boolean {
+      const conn = this.connections.get(peerId);
+      return !!(conn && conn.open);
   }
 }
 

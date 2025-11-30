@@ -49,7 +49,7 @@ export const INITIAL_CONTACTS: Contact[] = [
         description: 'You are a helpful AI assistant.',
         color: 'blue',
         messages: [
-          { id: 'm1', role: 'model', type: 'text', text: 'Hello! I am your AI assistant. You can add real friends using the "Add Contact" button, or chat with me here.', timestamp: Date.now(), isRead: true },
+          { id: 'm1', role: 'model', type: 'text', text: 'Hello! I am your AI assistant. To chat with real friends, share your ID with them and use the "Add Contact" button.', timestamp: Date.now(), isRead: true },
         ],
         lastActive: Date.now(),
       }
