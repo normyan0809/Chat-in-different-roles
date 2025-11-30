@@ -1,0 +1,5 @@
+{
+  "name": "PolyChat - Multi-Persona Messenger",
+  "description": "A revolutionary messaging app that allows you to maintain multiple distinct relationship contexts (personas) with a single contact. Switch instantly between 'Best Friend', 'Colleague', or custom roleplay scenarios, each with its own isolated chat history.",
+  "requestFramePermissions": []
+}
